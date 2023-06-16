@@ -1,9 +1,10 @@
 use bevy::{
     prelude::{
-        BuildChildren, Color, Commands, Component, Name, Query, Res, Resource, Transform, Vec2,
-        Visibility,
+        AssetServer, BuildChildren, Color, Commands, Component, Entity, Name, Query, Res, Resource,
+        Transform, Vec2, Visibility,
     },
     sprite::{Anchor, Sprite, SpriteBundle},
+    text::{Text, Text2dBundle, TextAlignment, TextSection, TextStyle},
 };
 use rand::seq::IteratorRandom;
 
@@ -124,10 +125,16 @@ pub fn drop_mines(mut cell_entities: Query<&mut CellKind>) {
     }
 }
 
-pub fn set_mines_neighbors_count(mut cell_entities: Query<(&Position, &mut CellKind)>) {
+pub fn set_mines_neighbors_count(
+    mut commands: Commands,
+    mut cell_entities: Query<(Entity, &Position, &mut CellKind)>,
+    assets_server: Res<AssetServer>,
+) {
+    let font = assets_server.load("fonts/pixeled.ttf");
+
     let mines_pos = cell_entities
         .iter()
-        .filter_map(|(position, cell_kind)| {
+        .filter_map(|(_, position, cell_kind)| {
             if *cell_kind != CellKind::Mine {
                 return None;
             }
@@ -136,7 +143,7 @@ pub fn set_mines_neighbors_count(mut cell_entities: Query<(&Position, &mut CellK
         })
         .collect::<Vec<Position>>();
 
-    for (position, mut cell_kind) in cell_entities.iter_mut() {
+    for (entity, position, mut cell_kind) in cell_entities.iter_mut() {
         if *cell_kind != CellKind::Empty {
             continue;
         }
@@ -155,7 +162,38 @@ pub fn set_mines_neighbors_count(mut cell_entities: Query<(&Position, &mut CellK
             *cell_kind = CellKind::MineNeighbor {
                 mines_count: neighbor_mines_count,
             };
+            commands.entity(entity).with_children(|parent| {
+                parent.spawn(Text2dBundle {
+                    text: Text {
+                        sections: vec![TextSection {
+                            value: neighbor_mines_count.to_string(),
+                            style: TextStyle {
+                                color: get_color_from_neighbor_mines_count(neighbor_mines_count),
+                                font: font.clone(),
+                                font_size: 30.,
+                                ..Default::default()
+                            },
+                        }],
+                        alignment: TextAlignment::Center,
+                        ..Default::default()
+                    },
+                    visibility: Visibility::Hidden,
+                    transform: Transform::from_xyz(12.5, 12.5, 2.), // todo se baser sur la taille paramétrer
+                    ..Default::default()
+                });
+            });
         }
+    }
+}
+
+fn get_color_from_neighbor_mines_count(count: u8) -> Color {
+    match count {
+        1 => Color::DARK_GREEN,
+        2 => Color::SEA_GREEN,
+        3 => Color::YELLOW_GREEN,
+        4 => Color::YELLOW,
+        5 => Color::ORANGE,
+        _ => Color::RED,
     }
 }
 
