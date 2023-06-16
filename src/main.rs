@@ -2,8 +2,8 @@ use std::collections::VecDeque;
 
 use bevy::{
     prelude::{
-        apply_system_buffers, App, Camera, Camera2dBundle, Children, ClearColor, Color, Commands,
-        Component, Entity, EventReader, EventWriter, GlobalTransform, Input, IntoSystemAppConfigs,
+        apply_system_buffers, App, Camera, Camera2dBundle, ClearColor, Color, Commands, Component,
+        Entity, EventReader, EventWriter, GlobalTransform, Input, IntoSystemAppConfigs,
         IntoSystemConfigs, MouseButton, Name, NextState, OnEnter, OnUpdate, Parent, PluginGroup,
         Query, Res, ResMut, States, Transform, Visibility, With,
     },
@@ -32,6 +32,7 @@ fn main() {
     App::new()
         .add_state::<GameState>()
         .add_event::<CellClickedEvent>()
+        .add_event::<CellFlaggedEvent>()
         .add_event::<MineNeighborUncoveredEvent>()
         .insert_resource(ClearColor(Color::DARK_GRAY))
         .insert_resource(GridParams::default()) // todo make it optional
@@ -58,7 +59,12 @@ fn main() {
                 .in_schedule(OnEnter(GameState::Loading)),
         )
         .add_systems(
-            (handle_click, flood_fill, display_uncovered_neighbor_count)
+            (
+                handle_click,
+                flood_fill,
+                display_uncovered_neighbor_count,
+                toggle_cell_fleg,
+            )
                 .in_set(OnUpdate(GameState::InGame)),
         )
         .run();
@@ -70,6 +76,7 @@ fn launch_game(mut next_state: ResMut<NextState<GameState>>) {
 
 fn handle_click(
     mut player_click_event_writer: EventWriter<CellClickedEvent>,
+    mut player_flag_event_writer: EventWriter<CellFlaggedEvent>,
     mouse_buttons: Res<Input<MouseButton>>,
     grid_options: Res<GridParams>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
@@ -87,6 +94,22 @@ fn handle_click(
             let y = cursor_world_pos.y / grid_options.cell_height.floor();
 
             player_click_event_writer.send(CellClickedEvent(Position {
+                x: x as i32,
+                y: y as i32,
+            }));
+        }
+    }
+
+    if mouse_buttons.just_pressed(MouseButton::Right) {
+        if let Some(cursor_world_pos) = primary_window
+            .cursor_position()
+            .and_then(|cursor| camera.viewport_to_world(camera_transform, cursor))
+            .map(|ray| ray.origin.truncate())
+        {
+            let x = cursor_world_pos.x / grid_options.cell_width.floor();
+            let y = cursor_world_pos.y / grid_options.cell_height.floor();
+
+            player_flag_event_writer.send(CellFlaggedEvent(Position {
                 x: x as i32,
                 y: y as i32,
             }));
@@ -115,7 +138,43 @@ struct MainCamera;
 
 struct CellClickedEvent(Position);
 
+struct CellFlaggedEvent(Position);
+
 struct MineNeighborUncoveredEvent(Entity);
+
+fn toggle_cell_fleg(
+    grid_params: Res<GridParams>, // todo: plutot utiliser le composant grid
+    mut cell_flagged_event: EventReader<CellFlaggedEvent>,
+    mut cells_entities: Query<(&Position, &mut CellState, &mut Sprite)>,
+) {
+    for CellFlaggedEvent(flagged_pos) in cell_flagged_event.iter() {
+        if is_out_of_bounds(
+            *flagged_pos,
+            grid_params.cell_count_per_row,
+            grid_params.row_count,
+        ) {
+            continue;
+        }
+
+        for (entity_pos, mut cell_state, mut sprite) in cells_entities.iter_mut() {
+            if *flagged_pos != *entity_pos {
+                continue;
+            }
+
+            match *cell_state {
+                CellState::Covered => {
+                    *cell_state = CellState::Flagged;
+                    sprite.color = Color::BLUE;
+                }
+                CellState::Uncovered => continue,
+                CellState::Flagged => {
+                    *cell_state = CellState::Covered;
+                    sprite.color = Color::WHITE;
+                }
+            };
+        }
+    }
+}
 
 fn flood_fill(
     grid_params: Res<GridParams>,
