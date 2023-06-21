@@ -5,7 +5,7 @@ use bevy::{
         apply_system_buffers, App, Camera, Camera2dBundle, ClearColor, Color, Commands, Component,
         Entity, EventReader, EventWriter, GlobalTransform, Input, IntoSystemAppConfigs,
         IntoSystemConfigs, MouseButton, Name, NextState, OnEnter, OnUpdate, Parent, PluginGroup,
-        Query, Res, ResMut, States, Transform, Visibility, With,
+        Query, Res, ResMut, Resource, States, Transform, Visibility, With,
     },
     sprite::Sprite,
     text::Text,
@@ -21,13 +21,6 @@ use grid::{
 
 mod grid;
 
-#[derive(States, PartialEq, Eq, Debug, Clone, Hash, Default)]
-enum GameState {
-    #[default]
-    Loading,
-    InGame,
-}
-
 fn main() {
     App::new()
         .add_state::<GameState>()
@@ -36,6 +29,7 @@ fn main() {
         .add_event::<MineNeighborUncoveredEvent>()
         .insert_resource(ClearColor(Color::DARK_GRAY))
         .insert_resource(GridParams::default()) // todo make it optional
+        .insert_resource(GameData::default())
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Mine sweeper !".into(),
@@ -45,7 +39,7 @@ fn main() {
             }),
             ..Default::default()
         }))
-        .add_plugin(WorldInspectorPlugin::new())
+        // .add_plugin(WorldInspectorPlugin::new())
         .add_startup_system(setup_camera)
         .add_systems(
             (
@@ -63,15 +57,71 @@ fn main() {
                 handle_click,
                 flood_fill,
                 display_uncovered_neighbor_count,
-                toggle_cell_fleg,
+                toggle_cell_flag,
+                game_win_wheck,
             )
                 .in_set(OnUpdate(GameState::InGame)),
         )
         .run();
 }
 
-fn launch_game(mut next_state: ResMut<NextState<GameState>>) {
+#[derive(States, PartialEq, Eq, Debug, Clone, Hash, Default)]
+enum GameState {
+    #[default]
+    Loading,
+    InGame,
+    Win,
+}
+
+#[derive(Resource, Clone)]
+struct GameData {
+    remaining_flags: u32,
+    remaining_mines: u32,
+}
+
+impl Default for GameData {
+    fn default() -> Self {
+        Self {
+            remaining_flags: 40,
+            remaining_mines: 40,
+        }
+    }
+}
+
+#[derive(Debug, Component)]
+struct MainCamera;
+
+struct CellClickedEvent(Position);
+
+struct CellFlaggedEvent(Position);
+
+struct MineNeighborUncoveredEvent(Entity);
+
+fn setup_camera(mut commands: Commands, grid_params: Res<GridParams>) {
+    let camera_pos = Transform::from_xyz(
+        grid_params.cell_width * grid_params.cell_count_per_row as f32 / 2.,
+        grid_params.cell_height * grid_params.row_count as f32 / 2.,
+        999.,
+    );
+
+    commands
+        .spawn(Name::new("main_camera"))
+        .insert(Camera2dBundle {
+            transform: camera_pos,
+            ..Default::default()
+        })
+        .insert(MainCamera);
+}
+
+fn launch_game(mut next_state: ResMut<NextState<GameState>>, mut game_data: ResMut<GameData>) {
+    *game_data = GameData::default();
     next_state.set(GameState::InGame);
+}
+
+fn game_win_wheck(mut next_state: ResMut<NextState<GameState>>, game_data: Res<GameData>) {
+    if game_data.remaining_mines == 0 {
+        next_state.set(GameState::Win); // todo ajouter système clear grid à l'entrée de ce statut
+    }
 }
 
 fn handle_click(
@@ -117,36 +167,16 @@ fn handle_click(
     }
 }
 
-fn setup_camera(mut commands: Commands, grid_params: Res<GridParams>) {
-    let camera_pos = Transform::from_xyz(
-        grid_params.cell_width * grid_params.cell_count_per_row as f32 / 2.,
-        grid_params.cell_height * grid_params.row_count as f32 / 2.,
-        999.,
-    );
-
-    commands
-        .spawn(Name::new("main_camera"))
-        .insert(Camera2dBundle {
-            transform: camera_pos,
-            ..Default::default()
-        })
-        .insert(MainCamera);
-}
-
-#[derive(Debug, Component)]
-struct MainCamera;
-
-struct CellClickedEvent(Position);
-
-struct CellFlaggedEvent(Position);
-
-struct MineNeighborUncoveredEvent(Entity);
-
-fn toggle_cell_fleg(
+fn toggle_cell_flag(
     grid_params: Res<GridParams>, // todo: plutot utiliser le composant grid
+    mut game_data: ResMut<GameData>,
     mut cell_flagged_event: EventReader<CellFlaggedEvent>,
-    mut cells_entities: Query<(&Position, &mut CellState, &mut Sprite)>,
+    mut cells_entities: Query<(&Position, &mut Sprite, &CellKind, &mut CellState)>,
 ) {
+    if game_data.remaining_flags == 0 {
+        return;
+    }
+
     for CellFlaggedEvent(flagged_pos) in cell_flagged_event.iter() {
         if is_out_of_bounds(
             *flagged_pos,
@@ -156,7 +186,7 @@ fn toggle_cell_fleg(
             continue;
         }
 
-        for (entity_pos, mut cell_state, mut sprite) in cells_entities.iter_mut() {
+        for (entity_pos, mut sprite, cell_kind, mut cell_state) in cells_entities.iter_mut() {
             if *flagged_pos != *entity_pos {
                 continue;
             }
@@ -165,11 +195,21 @@ fn toggle_cell_fleg(
                 CellState::Covered => {
                     *cell_state = CellState::Flagged;
                     sprite.color = Color::BLUE;
+                    game_data.remaining_flags -= 1;
+
+                    if *cell_kind == CellKind::Mine {
+                        game_data.remaining_mines -= 1;
+                    }
                 }
                 CellState::Uncovered => continue,
                 CellState::Flagged => {
                     *cell_state = CellState::Covered;
                     sprite.color = Color::WHITE;
+                    game_data.remaining_flags += 1;
+
+                    if *cell_kind == CellKind::Mine {
+                        game_data.remaining_mines += 1;
+                    }
                 }
             };
         }
